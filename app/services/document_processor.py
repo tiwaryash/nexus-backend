@@ -99,9 +99,10 @@ class DocumentProcessor:
             first_chunk = chunks[0] if chunks else text[:4000]
             
             try:
-                response = co.generate(
-                    model='command',
-                    prompt=f"""Analyze this text and provide the following in JSON format:
+                # Updated to use Cohere Chat API with current model
+                response = co.chat(
+                    model='command-r-08-2024',
+                    message=f"""Analyze this text and provide the following in JSON format:
                     1) summary: A concise 2-3 sentence summary
                     2) keywords: Array of 5-10 most important keywords
                     3) entities: Array of named entities (people, organizations, locations)
@@ -114,7 +115,7 @@ class DocumentProcessor:
                     temperature=0.3,
                 )
                 
-                ai_analysis = json.loads(response.generations[0].text)
+                ai_analysis = json.loads(response.text)
                 embedding = self.create_embeddings(text)
 
                 return {

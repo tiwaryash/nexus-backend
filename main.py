@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import auth, documents, analytics
+from app.api import auth, documents, analytics, chat
 from app.core.init_nltk import download_nltk_data
 import os
 import uvicorn
@@ -30,6 +30,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["documents"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 
 # Health check endpoint
 @app.get("/health")
