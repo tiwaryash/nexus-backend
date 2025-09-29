@@ -117,6 +117,8 @@ class DocumentProcessor:
                 
                 ai_analysis = json.loads(response.text)
                 embedding = self.create_embeddings(text)
+                
+                logger.info(f"AI Analysis successful: {ai_analysis}")
 
                 return {
                     "summary": ai_analysis.get("summary", ""),
@@ -156,15 +158,19 @@ class DocumentProcessor:
             return []
 
     def basic_analysis(self, text: str) -> Dict:
-        """Fallback analysis when OpenAI is unavailable"""
+        """Fallback analysis when AI is unavailable"""
         keywords = self.extract_keywords(text)
+        category = self.classify_document_by_keywords(keywords, text)
+        
+        logger.info(f"Basic analysis - Keywords: {keywords[:5]}, Category: {category}")
+        logger.info(f"Full text preview: {text[:100]}...")
         
         return {
             "summary": text[:200] + "...",  # Basic summary
             "keywords": keywords,
             "entities": self.extract_entities(text),
-            "category": "Document",
-            "embedding": None  # Skip embedding when OpenAI is unavailable
+            "category": category,
+            "embedding": self.create_embeddings(text)
         }
 
     def extract_entities(self, text: str) -> list[str]:
@@ -179,6 +185,85 @@ class DocumentProcessor:
                 named_entities.append(' '.join(c[0] for c in chunk))
         
         return list(set(named_entities))[:10]  # Return up to 10 unique entities
+
+    def classify_document_by_keywords(self, keywords: list[str], text: str) -> str:
+        """Classify document based on keywords and content patterns"""
+        # Convert keywords and text to lowercase for matching
+        keywords_lower = [k.lower() for k in keywords]
+        text_lower = text.lower()
+        
+        # Define category patterns
+        category_patterns = {
+            "Academic/Research": [
+                "research", "study", "analysis", "methodology", "hypothesis", "conclusion",
+                "abstract", "literature", "theory", "experiment", "data", "results",
+                "findings", "publication", "journal", "academic", "university", "scholar",
+                "behavior", "outcome", "distinction", "concept", "principle", "ethics",
+                "philosophy", "psychology", "sociology", "investigation", "observation"
+            ],
+            "Business/Finance": [
+                "business", "finance", "financial", "revenue", "profit", "market", "sales",
+                "investment", "budget", "strategy", "management", "company", "corporate",
+                "quarterly", "annual", "report", "earnings", "roi", "kpi", "metrics"
+            ],
+            "Technical/Programming": [
+                "code", "programming", "software", "development", "algorithm", "function",
+                "api", "database", "server", "framework", "library", "documentation",
+                "technical", "system", "architecture", "deployment", "debugging"
+            ],
+            "Legal/Contracts": [
+                "legal", "contract", "agreement", "clause", "terms", "conditions",
+                "law", "regulation", "compliance", "policy", "procedure", "rights",
+                "obligations", "liability", "jurisdiction", "attorney", "court"
+            ],
+            "Healthcare/Medical": [
+                "health", "medical", "patient", "treatment", "diagnosis", "symptoms",
+                "medicine", "healthcare", "clinical", "therapy", "hospital", "doctor",
+                "nurse", "pharmaceutical", "disease", "wellness", "surgery"
+            ],
+            "Education/Training": [
+                "education", "training", "learning", "course", "curriculum", "lesson",
+                "student", "teacher", "instructor", "classroom", "assessment", "grade",
+                "knowledge", "skill", "tutorial", "workshop", "seminar"
+            ],
+            "Marketing/Communications": [
+                "marketing", "advertising", "promotion", "campaign", "brand", "customer",
+                "communication", "social", "media", "content", "engagement", "outreach",
+                "publicity", "pr", "messaging", "audience", "demographic"
+            ],
+            "Personal/Miscellaneous": [
+                "personal", "journal", "diary", "note", "memo", "reminder", "todo",
+                "list", "plan", "schedule", "appointment", "meeting", "event",
+                "right", "wrong", "moral", "ethical", "values", "beliefs", "opinion",
+                "thoughts", "reflection", "perspective", "viewpoint"
+            ]
+        }
+        
+        # Score each category
+        category_scores = {}
+        for category, patterns in category_patterns.items():
+            score = 0
+            
+            # Check keywords
+            for keyword in keywords_lower:
+                for pattern in patterns:
+                    if pattern in keyword or keyword in pattern:
+                        score += 2  # Higher weight for keyword matches
+            
+            # Check text content
+            for pattern in patterns:
+                if pattern in text_lower:
+                    score += 1
+            
+            category_scores[category] = score
+        
+        # Return the category with the highest score, or "General" if no clear match
+        if category_scores:
+            best_category = max(category_scores, key=category_scores.get)
+            if category_scores[best_category] > 0:
+                return best_category
+        
+        return "General"
 
     async def apply_template(self, content: str, template_id: str) -> str:
         template = self.templates.get(template_id)

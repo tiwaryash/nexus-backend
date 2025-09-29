@@ -9,6 +9,7 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from collections import defaultdict
+from app.services.document_processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -114,31 +115,53 @@ async def get_document_insights(
 
         # Calculate domain overlaps using embeddings
         domain_overlaps = []
-        if embeddings:
-            embeddings_array = np.array(embeddings)
-            similarity_matrix = cosine_similarity(embeddings_array)
-            
-            clustering = DBSCAN(eps=0.3, min_samples=2)
-            clusters = clustering.fit_predict(similarity_matrix)
-            
+        
+        # Try embedding-based clustering first
+        if embeddings and len(embeddings) > 1:
+            try:
+                embeddings_array = np.array(embeddings)
+                similarity_matrix = cosine_similarity(embeddings_array)
+                
+                clustering = DBSCAN(eps=0.3, min_samples=2)
+                clusters = clustering.fit_predict(similarity_matrix)
+                
+                for category, docs in categories.items():
+                    related_clusters = set()
+                    keywords = domain_keywords[category]
+                    
+                    for doc in docs:
+                        if doc.metadata_col and doc.metadata_col.get("embedding"):
+                            try:
+                                doc_idx = documents.index(doc)
+                                if doc_idx < len(clusters) and clusters[doc_idx] != -1:
+                                    related_clusters.add(clusters[doc_idx])
+                            except ValueError:
+                                continue
+                    
+                    overlap_size = len(keywords) + len(related_clusters)
+                    if overlap_size > 0:
+                        domain_overlaps.append({
+                            "sets": [category],
+                            "size": overlap_size,
+                            "label": category,
+                            "keywords": list(keywords)[:5],
+                            "clusterCount": len(related_clusters)
+                        })
+            except Exception as e:
+                logger.error(f"Error in embedding-based clustering: {str(e)}")
+        
+        # Fallback: Create domain coverage based on categories and keywords
+        if not domain_overlaps:
             for category, docs in categories.items():
-                related_clusters = set()
                 keywords = domain_keywords[category]
-                
-                for doc in docs:
-                    if doc.metadata_col.get("embedding"):
-                        doc_idx = documents.index(doc)
-                        if clusters[doc_idx] != -1:
-                            related_clusters.add(clusters[doc_idx])
-                
-                overlap_size = len(keywords) + len(related_clusters)
-                domain_overlaps.append({
-                    "sets": [category],
-                    "size": overlap_size,
-                    "label": category,
-                    "keywords": list(keywords)[:5],
-                    "clusterCount": len(related_clusters)
-                })
+                if keywords:
+                    domain_overlaps.append({
+                        "sets": [category],
+                        "size": len(docs),
+                        "label": category,
+                        "keywords": list(keywords)[:5],
+                        "clusterCount": 1
+                    })
 
         # Calculate category statistics
         category_stats = {}
@@ -214,4 +237,58 @@ async def get_document_insights(
         raise HTTPException(
             status_code=500,
             detail="Error generating document insights"
+        )
+
+@router.post("/recategorize-documents", response_model=dict)
+async def recategorize_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Recategorize all documents for the current user"""
+    try:
+        processor = DocumentProcessor()
+        documents = db.query(Document).filter(Document.user_id == current_user.id).all()
+        
+        updated_count = 0
+        
+        for doc in documents:
+            try:
+                # Get existing metadata or create new
+                metadata = doc.metadata_col or {}
+                
+                # Extract keywords if not present
+                keywords = metadata.get("keywords", [])
+                if not keywords:
+                    keywords = processor.extract_keywords(doc.content)
+                    metadata["keywords"] = keywords
+                
+                # Classify the document
+                new_category = processor.classify_document_by_keywords(keywords, doc.content)
+                old_category = metadata.get("category", "")
+                
+                # Only update if category changed or was generic
+                if old_category != new_category or old_category in ["Document", "Uncategorized", "Unknown", ""]:
+                    metadata["category"] = new_category
+                    doc.metadata_col = metadata
+                    updated_count += 1
+                    logger.info(f"Updated '{doc.title}': {old_category} -> {new_category}")
+                
+            except Exception as e:
+                logger.error(f"Error processing document '{doc.title}': {str(e)}")
+                continue
+        
+        db.commit()
+        
+        return {
+            "message": f"Successfully recategorized {updated_count} documents",
+            "updated_count": updated_count,
+            "total_documents": len(documents)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in recategorization: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Error recategorizing documents"
         ) 

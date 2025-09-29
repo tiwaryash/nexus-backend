@@ -70,7 +70,9 @@ async def upload_document(
             embedding=analysis["embedding"],
             metadata_col={
                 "summary": analysis["summary"],
-                "keywords": analysis["keywords"]
+                "keywords": analysis["keywords"],
+                "entities": analysis.get("entities", []),
+                "category": analysis.get("category", "General")
             },
             user_id=current_user.id
         )
